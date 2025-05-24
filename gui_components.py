@@ -3,7 +3,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QDialog, QFormLayout, QDialogButtonBox,
     QSpinBox, QStyle, QApplication, QDesktopWidget, QTextEdit,
-    QScrollArea # Added QScrollArea
+    QScrollArea 
 )
 from PyQt5.QtCore import Qt, QTimer, QPoint, QEasingCurve, QPropertyAnimation, QRegularExpression
 from PyQt5.QtGui import QIcon, QRegularExpressionValidator, QColor
@@ -334,26 +334,20 @@ class ViewMemberDialog(QDialog):
         self.setWindowTitle(f"عرض معلومات العضو: {self.member.get_full_name_ar() or self.member.nin}")
         self.setModal(True)
         self.setLayoutDirection(Qt.RightToLeft)
-        self.setMinimumWidth(550) # Increased width for more details
-        self.setMinimumHeight(400) # Set a minimum height
-        # self.setMaximumHeight(650) # Optional: Set a maximum height if preferred over full scroll
-
-        # Main layout for the dialog
+        self.setMinimumWidth(550) 
+        self.setMinimumHeight(400) 
+        
         main_dialog_layout = QVBoxLayout(self)
-
-        # Scroll Area
         scroll_area = QScrollArea(self)
         scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded) # Show horizontal if needed
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)   # Show vertical if needed
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded) 
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)   
 
-        # Content widget for the scroll area
         content_widget = QWidget()
-        form_layout = QFormLayout(content_widget) # Use form_layout for the content_widget
+        form_layout = QFormLayout(content_widget) 
         form_layout.setLabelAlignment(Qt.AlignRight)
         form_layout.setSpacing(10)
 
-        # Helper function to add a read-only field to the form_layout
         def add_read_only_field(label_text, value_text):
             value_edit = QLineEdit(str(value_text) if value_text is not None else "")
             value_edit.setReadOnly(True)
@@ -400,30 +394,26 @@ class ViewMemberDialog(QDialog):
         add_read_only_field("عدد مرات الفشل المتتالية:", str(self.member.consecutive_failures))
         add_read_only_field("مستفيد حاليًا من المنحة؟:", "نعم" if self.member.have_allocation else "لا")
         
-        # Display allocation details if available
         if self.member.have_allocation and self.member.allocation_details:
             allocation_details_str = ", ".join(f"{key}: {value}" for key, value in self.member.allocation_details.items())
             add_read_only_field("تفاصيل الاستفادة:", allocation_details_str or "لا توجد تفاصيل")
 
-
-        # Set the content widget for the scroll area
         scroll_area.setWidget(content_widget)
-        main_dialog_layout.addWidget(scroll_area) # Add scroll area to the dialog's main layout
+        main_dialog_layout.addWidget(scroll_area) 
 
-        # Buttons layout
         button_layout = QHBoxLayout()
         button_layout.addStretch()
         self.close_button = QPushButton("إغلاق")
         self.close_button.clicked.connect(self.accept) 
         button_layout.addWidget(self.close_button)
         button_layout.addStretch()
-        main_dialog_layout.addLayout(button_layout) # Add button layout to the dialog's main layout
+        main_dialog_layout.addLayout(button_layout) 
 
 class ActivationDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("تفعيل البرنامج")
-        self.setModal(True) # تجعل النافذة تمنع التفاعل مع النوافذ الأخرى
+        self.setModal(True) 
         self.setLayoutDirection(Qt.RightToLeft)
         self.setMinimumWidth(350)
 
@@ -436,85 +426,39 @@ class ActivationDialog(QDialog):
         self.activation_code_input = QLineEdit(self)
         self.activation_code_input.setPlaceholderText("أدخل كود التفعيل هنا")
         self.activation_code_input.setAlignment(Qt.AlignCenter)
-        # يمكنك إضافة محدد لطول الكود أو نوع الأحرف إذا أردت
-        # self.activation_code_input.setMaxLength(20) 
         layout.addWidget(self.activation_code_input)
 
-        self.status_label = QLabel("", self) # لعرض رسائل الخطأ أو النجاح
+        self.status_label = QLabel("", self) 
         self.status_label.setAlignment(Qt.AlignCenter)
-        # تغيير لون النص للخطأ
-        # self.status_label.setStyleSheet("color: red;") 
         layout.addWidget(self.status_label)
 
-        # أزرار الحوار
         self.buttons = QDialogButtonBox(Qt.Horizontal, self)
         self.activate_button = self.buttons.addButton("تفعيل", QDialogButtonBox.AcceptRole)
         self.cancel_button = self.buttons.addButton("إلغاء", QDialogButtonBox.RejectRole)
         
         layout.addWidget(self.buttons)
 
-        # ربط الإشارات (signals)
-        self.activate_button.clicked.connect(self.on_activate_clicked)
-        self.cancel_button.clicked.connect(self.reject) # إغلاق النافذة عند الضغط على إلغاء
+        self.activate_button.clicked.connect(self._handle_activate_clicked)
+        self.cancel_button.clicked.connect(self._handle_cancel_clicked)
 
-    def on_activate_clicked(self):
-        """
-        يتم استدعاؤها عند الضغط على زر "تفعيل".
-        هنا يجب أن تقوم باستدعاء الدالة التي تتحقق من الكود.
-        """
-        code = self.get_activation_code()
-        if not code:
-            self.show_status_message("الرجاء إدخال كود التفعيل.", is_error=True)
-            return
-        
-        # في التطبيق الحقيقي، ستقوم بالتحقق من الكود هنا
-        # وإذا كان ناجحًا، ستقوم باستدعاء self.accept()
-        # وإذا فشل، ستعرض رسالة خطأ عبر self.show_status_message()
-        # حاليًا، سنقوم فقط بطباعة الكود وقبول الحوار
-        # print(f"Activation code entered: {code}")
-        # self.show_status_message(f"جاري التحقق من الكود: {code}...", is_error=False)
-        # self.accept() # مؤقتًا، سنقبل دائمًا
-        
-        # لا تقم باستدعاء self.accept() هنا مباشرة، بل دع main_app.py هو من يقرر
-        # بناءً على نتيجة التحقق من Firebase.
-        # فقط أرسل إشارة أو دع main_app.py يقرأ الكود بعد إغلاق النافذة بـ QDialogButtonBox.Accepted
-        
-        # إذا كنت تريد أن يبقى الحوار مفتوحًا أثناء التحقق، فستحتاج إلى آلية مختلفة
-        # ولكن للتبسيط، سنفترض أن التحقق يتم بعد إغلاق الحوار بـ "تفعيل"
+    def _handle_activate_clicked(self):
+        """معالجة الضغط على زر التفعيل."""
+        print("ActivationDialog: تم الضغط على زر 'تفعيل'") 
+        # logger.debug("ActivationDialog: تم الضغط على زر 'تفعيل'") # إذا كان لديك logger متاح هنا
+        self.accept() 
 
-        # فقط أغلق الحوار إذا تم الضغط على زر "تفعيل" بنجاح (بعد التحقق في main_app)
-        # أو إذا كان هناك خطأ فوري في الإدخال.
-        # بما أن التحقق الفعلي سيتم في main_app.py بعد إغلاق هذه النافذة،
-        # فإن الضغط على "تفعيل" سيؤدي إلى إغلاق النافذة مع نتيجة QDialog.Accepted
-        # ثم main_app.py سيأخذ الكود ويتحقق منه.
-        
-        # إذا أردت التحقق داخل الحوار قبل إغلاقه:
-        # from firebase_service import FirebaseService # (ستحتاج لاستيرادها)
-        # fb_service = FirebaseService() # أو تمرير كائن الخدمة إلى الحوار
-        # if fb_service.is_initialized():
-        #     is_valid, message, _ = fb_service.verify_activation_code(code)
-        #     if is_valid:
-        #         self.show_status_message("تم تفعيل البرنامج بنجاح!", is_error=False)
-        #         # يمكنك تأخير الإغلاق قليلاً لرؤية الرسالة
-        #         QTimer.singleShot(1500, self.accept)
-        #     else:
-        #         self.show_status_message(message, is_error=True)
-        # else:
-        #     self.show_status_message("خطأ في الاتصال بخدمة التفعيل. حاول مرة أخرى.", is_error=True)
-        pass # سيتم التعامل مع الضغط على الزر بواسطة QDialogButtonBox.accepted في main_app
+    def _handle_cancel_clicked(self):
+        """معالجة الضغط على زر الإلغاء."""
+        print("ActivationDialog: تم الضغط على زر 'إلغاء'") 
+        # logger.debug("ActivationDialog: تم الضغط على زر 'إلغاء'")
+        self.reject() 
 
     def get_activation_code(self):
-        """
-        تُرجع كود التفعيل الذي أدخله المستخدم.
-        """
         return self.activation_code_input.text().strip()
 
     def show_status_message(self, message, is_error=False):
-        """
-        تعرض رسالة حالة للمستخدم (مثل رسالة خطأ أو نجاح).
-        """
         self.status_label.setText(message)
         if is_error:
-            self.status_label.setStyleSheet("color: #E74C3C; font-weight: bold;") # لون أحمر للخطأ
+            self.status_label.setStyleSheet("color: #E74C3C; font-weight: bold;")
         else:
-            self.status_label.setStyleSheet("color: #2ECC71; font-weight: bold;") # لون أخضر للنجاح
+            self.status_label.setStyleSheet("color: #2ECC71; font-weight: bold;")

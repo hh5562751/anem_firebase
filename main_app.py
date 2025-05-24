@@ -59,11 +59,10 @@ def load_custom_fonts():
         else: logger.warning(f"ملف الخط غير موجود: {font_path}")
     if loaded_fonts_count > 0: logger.info(f"تم تحميل {loaded_fonts_count} خطوط مخصصة بنجاح.")
     else: logger.warning("لم يتم تحميل أي خطوط مخصصة.")
-# main_app.py
-# ... (بقية الاستيرادات والشيفرة كما هي) ...
 
 class AnemApp(QMainWindow):
-    # ... (COL_ICON, __init__, _initialize_and_check_activation تبقى كما هي من main_app_py_v2) ...
+    COL_ICON, COL_FULL_NAME_AR, COL_NIN, COL_WASSIT, COL_CCP, COL_PHONE_NUMBER, COL_STATUS, COL_RDV_DATE, COL_DETAILS = range(9)
+
     def __init__(self):
         super().__init__()
         self._should_initialize_ui = False 
@@ -74,7 +73,7 @@ class AnemApp(QMainWindow):
             return 
         self._should_initialize_ui = True
         logger.info("AnemApp __init__: نجح التفعيل. جاري إكمال تهيئة واجهة المستخدم.")
-        # ... (بقية __init__ كما هي من main_app_py_v2) ...
+        
         load_custom_fonts() 
         QApplication.setLayoutDirection(Qt.RightToLeft) 
         self.setWindowTitle("برنامج إدارة مواعيد منحة البطالة")
@@ -133,24 +132,21 @@ class AnemApp(QMainWindow):
         is_locally_activated, local_code = self.firebase_service.check_local_activation()
         if is_locally_activated:
             logger.info(f"_perform_activation_check_logic: البرنامج مفعل محليًا بالكود: {local_code}. يتم التحقق من صلاحية الكود عبر الإنترنت...")
-            is_still_valid, online_message, code_data = self.firebase_service.verify_activation_code(local_code) # الحصول على code_data
+            is_still_valid, online_message, code_data = self.firebase_service.verify_activation_code(local_code)
             
-            # تعديل الشرط ليشمل التحقق من أن الكود لا يزال UNUSED أو ACTIVE (للسماح بالاستخدام على نفس الجهاز إذا كان ACTIVE)
             is_status_ok_for_local = False
             if code_data and isinstance(code_data, dict):
                 status_from_firebase = code_data.get("status", "").upper()
-                if status_from_firebase == "ACTIVE": # إذا كان الكود ACTIVE بالفعل، فهو صالح للاستخدام المحلي
+                logger.debug(f"_perform_activation_check_logic: حالة الكود المحلي '{local_code}' في Firebase هي: {status_from_firebase}")
+                if status_from_firebase == "ACTIVE":
                     is_status_ok_for_local = True
-                elif status_from_firebase == "UNUSED" and is_still_valid: # إذا كان UNUSED وصالح، فهذا يعني أن التفعيل المحلي لم يكتمل/يسجل في Firebase
-                    is_status_ok_for_local = True # اعتبره صالحًا مبدئيًا، ولكن قد يحتاج لإعادة التفعيل
-
+            
             if is_still_valid and is_status_ok_for_local:
-                logger.info(f"_perform_activation_check_logic: الكود المحلي '{local_code}' لا يزال صالحًا ومستخدمًا بشكل صحيح.")
+                logger.info(f"_perform_activation_check_logic: الكود المحلي '{local_code}' لا يزال صالحًا ومستخدمًا بشكل صحيح (ACTIVE في Firebase).")
                 return True
             else:
                 log_msg_invalid_local = f"_perform_activation_check_logic: الكود المحلي '{local_code}' لم يعد صالحًا (is_still_valid: {is_still_valid}, online_message: {online_message}, is_status_ok_for_local: {is_status_ok_for_local}). يتطلب إعادة تفعيل."
-                if code_data:
-                    log_msg_invalid_local += f" Firebase status: {code_data.get('status')}"
+                if code_data: log_msg_invalid_local += f" Firebase status: {code_data.get('status')}"
                 logger.warning(log_msg_invalid_local)
                 try:
                     from config import ACTIVATION_STATUS_FILE as ASF_PATH 
@@ -166,38 +162,51 @@ class AnemApp(QMainWindow):
             return False
 
         while True: 
+            logger.debug("_perform_activation_check_logic: داخل حلقة طلب كود التفعيل.")
             activation_dialog = ActivationDialog(None) 
             screen_geometry = QApplication.desktop().screenGeometry()
             x = (screen_geometry.width() - activation_dialog.width()) // 2
             y = (screen_geometry.height() - activation_dialog.height()) // 2
             activation_dialog.move(x, y)
+            
+            logger.info("_perform_activation_check_logic: قبل استدعاء activation_dialog.exec_()") # رسالة تتبع جديدة
             result = activation_dialog.exec_() 
+            logger.info(f"_perform_activation_check_logic: بعد استدعاء activation_dialog.exec_(). النتيجة: {result} (Accepted={QDialog.Accepted}, Rejected={QDialog.Rejected})") # رسالة تتبع جديدة
 
             if result == QDialog.Accepted: 
                 entered_code = activation_dialog.get_activation_code()
+                logger.info(f"_perform_activation_check_logic: المستخدم ضغط 'تفعيل'. الكود المدخل: '{entered_code}'")
                 if not entered_code:
                     logger.warning("_perform_activation_check_logic: لم يتم إدخال كود تفعيل.")
-                    QMessageBox.warning(None, "إدخال ناقص", "الرجاء إدخال كود التفعيل.") # استخدام None كـ parent
+                    QMessageBox.warning(None, "إدخال ناقص", "الرجاء إدخال كود التفعيل.")
                     continue 
 
-                # إظهار رسالة "جاري التحقق" للمستخدم قبل البدء بالعمليات التي قد تستغرق وقتًا
-                # يمكن استخدام نافذة حوار بسيطة غير قابلة للإغلاق أو تحديث نص في ActivationDialog إذا بقيت مفتوحة
-                # للتبسيط الآن، سنعتمد على استجابة سريعة من Firebase
-                # activation_dialog.show_status_message(f"جاري التحقق من الكود: {entered_code}...", is_error=False) # هذا لن يظهر إذا أغلقت النافذة
-                # QApplication.processEvents() 
                 loading_msg_box = QMessageBox(QMessageBox.Information, "جاري التحقق", f"جاري التحقق من كود التفعيل: {entered_code}\nالرجاء الانتظار...", QMessageBox.NoButton, None)
-                loading_msg_box.setStandardButtons(QMessageBox.NoButton) # إزالة الأزرار
+                loading_msg_box.setStandardButtons(QMessageBox.NoButton)
                 loading_msg_box.show()
-                QApplication.processEvents()
+                QApplication.processEvents() # السماح بتحديث الواجهة لإظهار الرسالة
+                logger.debug(f"_perform_activation_check_logic: جاري استدعاء firebase_service.verify_activation_code('{entered_code}')")
 
-
-                is_valid, message, code_data_from_verify = self.firebase_service.verify_activation_code(entered_code)
-                loading_msg_box.close() # إغلاق رسالة الانتظار
+                try:
+                    is_valid, message, code_data_from_verify = self.firebase_service.verify_activation_code(entered_code)
+                    logger.info(f"_perform_activation_check_logic: نتيجة verify_activation_code: is_valid={is_valid}, message='{message}'")
+                except Exception as e_verify:
+                    logger.exception(f"_perform_activation_check_logic: حدث خطأ استثنائي أثناء verify_activation_code: {e_verify}")
+                    is_valid = False
+                    message = "حدث خطأ غير متوقع أثناء التحقق من الكود. يرجى المحاولة مرة أخرى."
+                finally:
+                    loading_msg_box.close() 
 
                 if is_valid:
                     device_id = self.firebase_service.get_device_id()
                     logger.info(f"_perform_activation_check_logic: كود صالح. جاري تحديث Firebase. Device ID: {device_id}")
-                    if self.firebase_service.mark_code_as_used(entered_code, device_id):
+                    mark_success = False
+                    try:
+                        mark_success = self.firebase_service.mark_code_as_used(entered_code, device_id)
+                    except Exception as e_mark:
+                        logger.exception(f"_perform_activation_check_logic: حدث خطأ استثنائي أثناء mark_code_as_used: {e_mark}")
+                    
+                    if mark_success:
                         self.firebase_service.save_local_activation(entered_code, device_id)
                         logger.info(f"_perform_activation_check_logic: تم تفعيل البرنامج بنجاح بالكود: {entered_code}")
                         QMessageBox.information(None, "نجاح التفعيل", "تم تفعيل البرنامج بنجاح!")
@@ -205,20 +214,22 @@ class AnemApp(QMainWindow):
                     else:
                         logger.error(f"_perform_activation_check_logic: فشل تحديث حالة الكود '{entered_code}' في Firebase.")
                         QMessageBox.critical(None, "خطأ في الخادم", "حدث خطأ أثناء تحديث الكود على الخادم. يرجى المحاولة مرة أخرى أو الاتصال بالدعم.")
-                        continue # السماح بمحاولة أخرى
+                        continue 
                 else:
                     logger.warning(f"_perform_activation_check_logic: فشل التحقق من الكود '{entered_code}': {message}")
                     QMessageBox.warning(None, "فشل التحقق", message)
-                    continue # السماح بمحاولة أخرى
+                    continue 
             
             elif result == QDialog.Rejected: 
                 logger.warning("_perform_activation_check_logic: عملية التفعيل ألغيت من قبل المستخدم.")
                 QMessageBox.information(None, "التفعيل مطلوب", "البرنامج يتطلب تفعيلًا للاستخدام. سيتم إغلاق التطبيق الآن.")
                 return False
+            else: # نتيجة غير متوقعة (مثل إغلاق النافذة بطريقة أخرى)
+                logger.error(f"_perform_activation_check_logic: نتيجة غير متوقعة من activation_dialog.exec_(): {result}. سيتم اعتبار العملية ملغاة.")
+                QMessageBox.information(None, "التفعيل مطلوب", "تم إلغاء عملية التفعيل. سيتم إغلاق التطبيق الآن.")
+                return False
     
-    # ... (بقية الدوال init_ui وما بعدها تبقى كما هي من main_app_py_v2) ...
     def init_ui(self):
-        # ... (بقية init_ui كما هي) ...
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
@@ -828,7 +839,7 @@ class AnemApp(QMainWindow):
     def update_datetime(self):
         now = QDateTime.currentDateTime()
         arabic_locale = QLocale(QLocale.Arabic, QLocale.Algeria) 
-        self.datetime_label.setText(arabic_locale.toString(now, "dddd, dd MMMM yyyy - hh:mm:ss AP"))
+        self.datetime_label.setText(arabic_locale.toString(now, "dddd, dd MMMM yyyy - hh:mm:ss AP")) # تصحيح التنسيق
     
     def toggle_column_visibility(self, checked):
         logger.info(f"تبديل إظهار التفاصيل: {'إظهار' if checked else 'إخفاء'}")
@@ -1566,8 +1577,8 @@ class AnemApp(QMainWindow):
             self.active_download_all_pdfs_threads.clear()
 
 
-        if self.datetime_timer.isActive(): self.datetime_timer.stop()
-        if self.row_spinner_timer.isActive(): self.row_spinner_timer.stop() 
+        if hasattr(self, 'datetime_timer') and self.datetime_timer.isActive(): self.datetime_timer.stop() # التحقق قبل الإيقاف
+        if hasattr(self, 'row_spinner_timer') and self.row_spinner_timer.isActive(): self.row_spinner_timer.stop()  # التحقق قبل الإيقاف
         logger.info("تم إغلاق التطبيق.")
         super().closeEvent(event)
 
@@ -1576,11 +1587,13 @@ if __name__ == '__main__':
     main_window = AnemApp()
     if not hasattr(main_window, '_should_initialize_ui') or not main_window._should_initialize_ui:
         logger.critical("__main__: لم يتم تحديد _should_initialize_ui أو قيمته False. الخروج من التطبيق.")
-        # إذا فشلت تهيئة Firebase الأساسية (مثل عدم وجود ملف المفتاح)
         if hasattr(main_window, 'activation_successful') and not main_window.activation_successful:
-             # رسالة الخطأ الفادح يجب أن تكون قد عُرضت من داخل _perform_activation_check_logic
-             # إذا كان السبب هو إلغاء المستخدم، فقد عُرضت رسالة "التفعيل مطلوب"
-             pass 
+             if hasattr(main_window, 'firebase_service') and not main_window.firebase_service.is_initialized():
+                 QMessageBox.critical(None, "خطأ فادح في Firebase",
+                                     f"لا يمكن تهيئة خدمة Firebase. الرجاء التأكد من وجود ملف '{FIREBASE_SERVICE_ACCOUNT_KEY_FILE}' وأنه صالح.\nسيتم إغلاق البرنامج.",
+                                     QMessageBox.Ok)
+             elif not (hasattr(main_window, 'firebase_service') and main_window.firebase_service.is_initialized()):
+                 QMessageBox.critical(None, "خطأ فادح", "حدث خطأ غير متوقع أثناء تهيئة خدمات البرنامج.\nسيتم إغلاق البرنامج.", QMessageBox.Ok)
         sys.exit(1) 
     
     logger.info("__main__: نجح التفعيل. جاري إظهار النافذة الرئيسية.")
