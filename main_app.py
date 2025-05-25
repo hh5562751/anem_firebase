@@ -5,7 +5,7 @@ import os
 import logging
 import random
 import time 
-import webbrowser 
+import datetime 
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -23,11 +23,12 @@ from api_client import AnemAPIClient
 from member import Member 
 from threads import FetchInitialInfoThread, MonitoringThread, SingleMemberCheckThread, DownloadAllPdfsThread 
 from config import (
-    LOG_FILE, DATA_FILE, STYLESHEET_FILE, SETTINGS_FILE,
+    DATA_FILE, STYLESHEET_FILE, SETTINGS_FILE,
     DEFAULT_SETTINGS, SETTING_MIN_MEMBER_DELAY, SETTING_MAX_MEMBER_DELAY,
     SETTING_MONITORING_INTERVAL, SETTING_BACKOFF_429, SETTING_BACKOFF_GENERAL,
     SETTING_REQUEST_TIMEOUT, MAX_ERROR_DISPLAY_LENGTH,
-    FIREBASE_SERVICE_ACCOUNT_KEY_FILE 
+    FIREBASE_SERVICE_ACCOUNT_KEY_FILE, 
+    FIRESTORE_ACTIVATION_CODES_COLLECTION
 )
 from logger_setup import setup_logging
 from utils import QColorConstants, get_icon_name_for_status 
@@ -53,7 +54,7 @@ def load_custom_fonts():
             if font_id != -1:
                 font_families = QFontDatabase.applicationFontFamilies(font_id)
                 if font_families:
-                    logger.info(f"تم تحميل الخط بنجاح: {font_file} (العائلة: {font_families[0]})")
+                    # logger.info(f"تم تحميل الخط بنجاح: {font_file} (العائلة: {font_families[0]})")
                     loaded_fonts_count +=1
             else: logger.warning(f"فشل تحميل الخط: {font_file} من المسار: {font_path}")
         else: logger.warning(f"ملف الخط غير موجود: {font_path}")
@@ -66,13 +67,13 @@ class AnemApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self._should_initialize_ui = False 
-        logger.info("AnemApp __init__: بدء التهيئة الأولية.")
+        # logger.info("AnemApp __init__: بدء التهيئة الأولية.") # تعليق مخفف
         self._initialize_and_check_activation() 
         if not self.activation_successful:
             logger.critical("AnemApp __init__: فشل تفعيل البرنامج. لن يتم إكمال تهيئة واجهة المستخدم.")
             return 
         self._should_initialize_ui = True
-        logger.info("AnemApp __init__: نجح التفعيل. جاري إكمال تهيئة واجهة المستخدم.")
+        # logger.info("AnemApp __init__: نجح التفعيل. جاري إكمال تهيئة واجهة المستخدم.") # تعليق مخفف
         
         load_custom_fonts() 
         QApplication.setLayoutDirection(Qt.RightToLeft) 
@@ -81,7 +82,7 @@ class AnemApp(QMainWindow):
         available_geometry = desktop.availableGeometry(self)
         self.setGeometry(available_geometry)
         self.setWindowState(Qt.WindowMaximized)
-        logger.info("AnemApp __init__: تم ضبط النافذة.")
+        # logger.info("AnemApp __init__: تم ضبط النافذة.") # تعليق مخفف
 
         self.settings = {}
         self.load_app_settings() 
@@ -119,112 +120,163 @@ class AnemApp(QMainWindow):
         self.load_stylesheet() 
         self.load_members_data() 
         QTimer.singleShot(0, self.apply_app_settings)
-        logger.info("AnemApp __init__: اكتملت التهيئة الكاملة.")
+        logger.info("AnemApp __init__: اكتملت التهيئة.") # رسالة أخف
 
     def _initialize_and_check_activation(self):
-        logger.info("_initialize_and_check_activation: بدء تهيئة Firebase والتحقق من التفعيل.")
+        # logger.info("_initialize_and_check_activation: بدء تهيئة Firebase والتحقق من التفعيل.") # تعليق مخفف
         self.firebase_service = FirebaseService()
         self.activation_successful = self._perform_activation_check_logic()
-        logger.info(f"_initialize_and_check_activation: نتيجة التحقق من التفعيل: {self.activation_successful}")
+        # logger.info(f"_initialize_and_check_activation: نتيجة التحقق من التفعيل: {self.activation_successful}") # تعليق مخفف
 
     def _perform_activation_check_logic(self):
         logger.info("_perform_activation_check_logic: بدء التحقق من تفعيل البرنامج...")
         is_locally_activated, local_code = self.firebase_service.check_local_activation()
-        if is_locally_activated:
+        
+        # جمع معلومات الجهاز مرة واحدة في البداية
+        current_device_info = self.firebase_service.get_device_info()
+        logger.info(f"معلومات الجهاز المجمعة عند بدء التشغيل: {current_device_info}")
+
+
+        if is_locally_activated and local_code:
             logger.info(f"_perform_activation_check_logic: البرنامج مفعل محليًا بالكود: {local_code}. يتم التحقق من صلاحية الكود عبر الإنترنت...")
-            is_still_valid, online_message, code_data = self.firebase_service.verify_activation_code(local_code)
             
-            is_status_ok_for_local = False
-            if code_data and isinstance(code_data, dict):
-                status_from_firebase = code_data.get("status", "").upper()
-                logger.debug(f"_perform_activation_check_logic: حالة الكود المحلي '{local_code}' في Firebase هي: {status_from_firebase}")
-                if status_from_firebase == "ACTIVE":
-                    is_status_ok_for_local = True
+            if not self.firebase_service.is_initialized():
+                logger.error("_perform_activation_check_logic: خدمة Firebase غير مهيأة عند التحقق من الكود المحلي.")
+                QMessageBox.critical(None, "خطأ في Firebase", "لا يمكن الاتصال بخدمة Firebase للتحقق من التفعيل المحلي. يرجى التحقق من اتصالك بالإنترنت والمحاولة مرة أخرى.")
+                return False
+
+            try:
+                code_ref = self.firebase_service.db.collection(FIRESTORE_ACTIVATION_CODES_COLLECTION).document(local_code.strip())
+                code_doc = code_ref.get()
+
+                if code_doc.exists:
+                    code_data = code_doc.to_dict()
+                    firebase_status = code_data.get("status", "").upper()
+                    # firebase_device_id = code_data.get("activatedByDeviceID") # يمكن استخدامه للمقارنة إذا أردت
+                    # local_generated_device_id = current_device_info.get("generated_device_id")
+
+                    expires_at_timestamp = code_data.get("expiresAt")
+                    if expires_at_timestamp:
+                        if isinstance(expires_at_timestamp, datetime.datetime):
+                            expires_at_dt = expires_at_timestamp
+                        else: 
+                            expires_at_dt = expires_at_timestamp.to_datetime()
+                        
+                        current_time_for_expiry_check = datetime.datetime.now(expires_at_dt.tzinfo if hasattr(expires_at_dt, 'tzinfo') else None)
+                        if expires_at_dt < current_time_for_expiry_check:
+                            logger.warning(f"_perform_activation_check_logic: الكود المحلي '{local_code}' منتهي الصلاحية بتاريخ: {expires_at_dt}.")
+                            try:
+                                from config import ACTIVATION_STATUS_FILE as ASF_PATH
+                                if os.path.exists(ASF_PATH): os.remove(ASF_PATH)
+                                logger.info("_perform_activation_check_logic: تم حذف ملف التفعيل المحلي المنتهي الصلاحية.")
+                            except Exception as e_remove_expired:
+                                logger.error(f"_perform_activation_check_logic: خطأ أثناء حذف ملف التفعيل المحلي المنتهي الصلاحية: {e_remove_expired}")
+                            is_locally_activated = False
+                            local_code = None
+
+                    if is_locally_activated and firebase_status == "ACTIVE":
+                        # إذا كنت تريد تحديث معلومات الجهاز في Firebase عند كل تشغيل ناجح للتطبيق المفعل:
+                        # self.firebase_service.mark_code_as_used(local_code, current_device_info) # هذا سيسجل lastUsedAt ومعلومات الجهاز المحدثة
+                        logger.info(f"_perform_activation_check_logic: الكود المحلي '{local_code}' صالح وحالته 'ACTIVE' في Firebase.")
+                        return True 
+                    elif is_locally_activated: 
+                        logger.warning(f"_perform_activation_check_logic: الكود المحلي '{local_code}' حالته في Firebase هي '{firebase_status}' (وليست ACTIVE). يتطلب إعادة تفعيل.")
+                        is_locally_activated = False 
+                        local_code = None
+                else: 
+                    logger.warning(f"_perform_activation_check_logic: الكود المحلي '{local_code}' غير موجود في Firebase. يتطلب إعادة تفعيل.")
+                    is_locally_activated = False
+                    local_code = None
+
+            except Exception as e_fb_check:
+                logger.exception(f"_perform_activation_check_logic: خطأ أثناء التحقق من الكود المحلي '{local_code}' في Firebase: {e_fb_check}")
+                QMessageBox.warning(None, "خطأ في التحقق", f"حدث خطأ أثناء التحقق من التفعيل المحلي عبر الإنترنت: {e_fb_check}. يرجى المحاولة مرة أخرى.")
+                is_locally_activated = False
+                local_code = None
             
-            if is_still_valid and is_status_ok_for_local:
-                logger.info(f"_perform_activation_check_logic: الكود المحلي '{local_code}' لا يزال صالحًا ومستخدمًا بشكل صحيح (ACTIVE في Firebase).")
-                return True
-            else:
-                log_msg_invalid_local = f"_perform_activation_check_logic: الكود المحلي '{local_code}' لم يعد صالحًا (is_still_valid: {is_still_valid}, online_message: {online_message}, is_status_ok_for_local: {is_status_ok_for_local}). يتطلب إعادة تفعيل."
-                if code_data: log_msg_invalid_local += f" Firebase status: {code_data.get('status')}"
-                logger.warning(log_msg_invalid_local)
+            if not is_locally_activated: 
                 try:
                     from config import ACTIVATION_STATUS_FILE as ASF_PATH 
                     if os.path.exists(ASF_PATH):
                         os.remove(ASF_PATH)
-                    logger.info("_perform_activation_check_logic: تم حذف ملف التفعيل المحلي غير الصالح.")
+                    logger.info("_perform_activation_check_logic: تم حذف ملف التفعيل المحلي غير الصالح أو المنتهي.")
                 except Exception as e_remove:
-                    logger.error(f"_perform_activation_check_logic: خطأ أثناء حذف ملف التفعيل المحلي غير الصالح: {e_remove}")
-        
+                    logger.error(f"_perform_activation_check_logic: خطأ أثناء حذف ملف التفعيل المحلي: {e_remove}")
+
         logger.info("_perform_activation_check_logic: البرنامج غير مفعل محليًا أو الكود المحلي لم يعد صالحًا. يتطلب التفعيل عبر الإنترنت.")
         if not self.firebase_service.is_initialized():
             logger.critical(f"_perform_activation_check_logic: خدمة Firebase غير مهيأة. تأكد من وجود ملف '{FIREBASE_SERVICE_ACCOUNT_KEY_FILE}' وأنه صالح.")
             return False
 
         while True: 
-            logger.debug("_perform_activation_check_logic: داخل حلقة طلب كود التفعيل.")
             activation_dialog = ActivationDialog(None) 
             screen_geometry = QApplication.desktop().screenGeometry()
-            x = (screen_geometry.width() - activation_dialog.width()) // 2
-            y = (screen_geometry.height() - activation_dialog.height()) // 2
-            activation_dialog.move(x, y)
+            x_pos = (screen_geometry.width() - activation_dialog.width()) // 2
+            y_pos = (screen_geometry.height() - activation_dialog.height()) // 2
+            activation_dialog.move(x_pos, y_pos)
             
-            logger.info("_perform_activation_check_logic: قبل استدعاء activation_dialog.exec_()") # رسالة تتبع جديدة
+            # logger.info("_perform_activation_check_logic: قبل استدعاء activation_dialog.exec_()") # تعليق مخفف
             result = activation_dialog.exec_() 
-            logger.info(f"_perform_activation_check_logic: بعد استدعاء activation_dialog.exec_(). النتيجة: {result} (Accepted={QDialog.Accepted}, Rejected={QDialog.Rejected})") # رسالة تتبع جديدة
+            # logger.info(f"_perform_activation_check_logic: بعد استدعاء activation_dialog.exec_(). النتيجة: {result} (Accepted={QDialog.Accepted}, Rejected={QDialog.Rejected})") # تعليق مخفف
 
             if result == QDialog.Accepted: 
                 entered_code = activation_dialog.get_activation_code()
-                logger.info(f"_perform_activation_check_logic: المستخدم ضغط 'تفعيل'. الكود المدخل: '{entered_code}'")
+                # logger.info(f"_perform_activation_check_logic: المستخدم ضغط 'تفعيل'. الكود المدخل: '{entered_code}'") # تعليق مخفف
                 if not entered_code:
                     logger.warning("_perform_activation_check_logic: لم يتم إدخال كود تفعيل.")
-                    QMessageBox.warning(None, "إدخال ناقص", "الرجاء إدخال كود التفعيل.")
+                    activation_dialog.show_status_message("الرجاء إدخال كود التفعيل.", is_error=True)
                     continue 
 
-                loading_msg_box = QMessageBox(QMessageBox.Information, "جاري التحقق", f"جاري التحقق من كود التفعيل: {entered_code}\nالرجاء الانتظار...", QMessageBox.NoButton, None)
-                loading_msg_box.setStandardButtons(QMessageBox.NoButton)
-                loading_msg_box.show()
-                QApplication.processEvents() # السماح بتحديث الواجهة لإظهار الرسالة
-                logger.debug(f"_perform_activation_check_logic: جاري استدعاء firebase_service.verify_activation_code('{entered_code}')")
+                activation_dialog.status_label.setText("جاري التحقق من الكود...") 
+                activation_dialog.status_label.setStyleSheet("color: #E0E0E0;") 
+                activation_dialog.activate_button.setEnabled(False)
+                activation_dialog.activation_code_input.setEnabled(False)
+                QApplication.processEvents() 
+                # logger.debug(f"_perform_activation_check_logic: جاري استدعاء firebase_service.verify_activation_code('{entered_code}')") # تعليق مخفف
 
                 try:
-                    is_valid, message, code_data_from_verify = self.firebase_service.verify_activation_code(entered_code)
-                    logger.info(f"_perform_activation_check_logic: نتيجة verify_activation_code: is_valid={is_valid}, message='{message}'")
+                    is_valid_for_new_use, message, code_data_from_verify = self.firebase_service.verify_activation_code(entered_code)
+                    # logger.info(f"_perform_activation_check_logic: نتيجة verify_activation_code: is_valid_for_new_use={is_valid_for_new_use}, message='{message}'") # تعليق مخفف
                 except Exception as e_verify:
                     logger.exception(f"_perform_activation_check_logic: حدث خطأ استثنائي أثناء verify_activation_code: {e_verify}")
-                    is_valid = False
+                    is_valid_for_new_use = False
                     message = "حدث خطأ غير متوقع أثناء التحقق من الكود. يرجى المحاولة مرة أخرى."
                 finally:
-                    loading_msg_box.close() 
+                    activation_dialog.activate_button.setEnabled(True)
+                    activation_dialog.activation_code_input.setEnabled(True)
+                    QApplication.processEvents()
 
-                if is_valid:
-                    device_id = self.firebase_service.get_device_id()
-                    logger.info(f"_perform_activation_check_logic: كود صالح. جاري تحديث Firebase. Device ID: {device_id}")
+                if is_valid_for_new_use: 
+                    logger.info(f"_perform_activation_check_logic: كود صالح للاستخدام. جاري تحديث Firebase. معلومات الجهاز: {current_device_info}")
                     mark_success = False
                     try:
-                        mark_success = self.firebase_service.mark_code_as_used(entered_code, device_id)
+                        # تمرير معلومات الجهاز هنا
+                        mark_success = self.firebase_service.mark_code_as_used(entered_code, current_device_info)
                     except Exception as e_mark:
                         logger.exception(f"_perform_activation_check_logic: حدث خطأ استثنائي أثناء mark_code_as_used: {e_mark}")
                     
                     if mark_success:
-                        self.firebase_service.save_local_activation(entered_code, device_id)
+                        # تمرير معلومات الجهاز هنا أيضًا للحفظ المحلي
+                        self.firebase_service.save_local_activation(entered_code, current_device_info)
                         logger.info(f"_perform_activation_check_logic: تم تفعيل البرنامج بنجاح بالكود: {entered_code}")
+                        activation_dialog.show_status_message("تم التفعيل بنجاح!", is_error=False)
                         QMessageBox.information(None, "نجاح التفعيل", "تم تفعيل البرنامج بنجاح!")
+                        activation_dialog.accept() 
                         return True 
                     else:
                         logger.error(f"_perform_activation_check_logic: فشل تحديث حالة الكود '{entered_code}' في Firebase.")
-                        QMessageBox.critical(None, "خطأ في الخادم", "حدث خطأ أثناء تحديث الكود على الخادم. يرجى المحاولة مرة أخرى أو الاتصال بالدعم.")
+                        activation_dialog.show_status_message("خطأ في الخادم عند تحديث الكود.", is_error=True)
                         continue 
-                else:
+                else: 
                     logger.warning(f"_perform_activation_check_logic: فشل التحقق من الكود '{entered_code}': {message}")
-                    QMessageBox.warning(None, "فشل التحقق", message)
+                    activation_dialog.show_status_message(message, is_error=True)
                     continue 
             
             elif result == QDialog.Rejected: 
                 logger.warning("_perform_activation_check_logic: عملية التفعيل ألغيت من قبل المستخدم.")
                 QMessageBox.information(None, "التفعيل مطلوب", "البرنامج يتطلب تفعيلًا للاستخدام. سيتم إغلاق التطبيق الآن.")
                 return False
-            else: # نتيجة غير متوقعة (مثل إغلاق النافذة بطريقة أخرى)
+            else: 
                 logger.error(f"_perform_activation_check_logic: نتيجة غير متوقعة من activation_dialog.exec_(): {result}. سيتم اعتبار العملية ملغاة.")
                 QMessageBox.information(None, "التفعيل مطلوب", "تم إلغاء عملية التفعيل. سيتم إغلاق التطبيق الآن.")
                 return False
@@ -378,7 +430,7 @@ class AnemApp(QMainWindow):
         main_layout.addLayout(bottom_controls_layout)
         
         self.update_status_bar_message("التطبيق جاهز.", is_general_message=True)
-        logger.info("init_ui: اكتملت تهيئة واجهة المستخدم.")
+        # logger.info("init_ui: اكتملت تهيئة واجهة المستخدم.") # تعليق مخفف
 
     def toggle_search_filter_bar(self, checked):
         self.search_filter_frame.setVisible(checked)
@@ -734,7 +786,7 @@ class AnemApp(QMainWindow):
                 for key, default_value in DEFAULT_SETTINGS.items():
                     if key not in self.settings:
                         self.settings[key] = default_value
-                logger.info(f"تم تحميل الإعدادات من {SETTINGS_FILE}")
+                # logger.info(f"تم تحميل الإعدادات من {SETTINGS_FILE}") # تعليق مخفف
             else:
                 self.settings = DEFAULT_SETTINGS.copy()
                 logger.info("ملف الإعدادات غير موجود، تم استخدام الإعدادات الافتراضية.")
@@ -752,7 +804,7 @@ class AnemApp(QMainWindow):
         try:
             with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
                 json.dump(self.settings, f, ensure_ascii=False, indent=4)
-            logger.info(f"تم حفظ الإعدادات في {SETTINGS_FILE}")
+            # logger.info(f"تم حفظ الإعدادات في {SETTINGS_FILE}") # تعليق مخفف
         except Exception as e:
             logger.exception(f"خطأ عند حفظ الإعدادات: {e}")
             self._show_toast(f"فشل حفظ الإعدادات: {e}", type="error")
@@ -774,10 +826,10 @@ class AnemApp(QMainWindow):
             initial_backoff_429=self.settings.get(SETTING_BACKOFF_429, DEFAULT_SETTINGS[SETTING_BACKOFF_429]),
             request_timeout=self.settings.get(SETTING_REQUEST_TIMEOUT, DEFAULT_SETTINGS[SETTING_REQUEST_TIMEOUT])
         )
-        logger.info("تم تحديث AnemAPIClient الرئيسي بالإعدادات الجديدة.")
+        # logger.info("تم تحديث AnemAPIClient الرئيسي بالإعدادات الجديدة.") # تعليق مخفف
 
         if self.monitoring_thread.isRunning():
-            logger.info("المراقبة جارية، سيتم تحديث إعدادات خيط المراقبة.")
+            # logger.info("المراقبة جارية، سيتم تحديث إعدادات خيط المراقبة.") # تعليق مخفف
             self.monitoring_thread.update_thread_settings(self.settings.copy())
             monitoring_interval_minutes = self.settings.get(SETTING_MONITORING_INTERVAL, DEFAULT_SETTINGS[SETTING_MONITORING_INTERVAL])
             self.update_status_bar_message(f"المراقبة جارية (الدورة كل {monitoring_interval_minutes} دقيقة)...", is_general_message=False)
@@ -785,8 +837,8 @@ class AnemApp(QMainWindow):
             self.monitoring_thread.settings = self.settings.copy() 
             self.monitoring_thread._apply_settings() 
 
-        logger.info(f"MonitoringThread settings applied from main app: Interval={self.settings.get(SETTING_MONITORING_INTERVAL)}min, MemberDelay=[{self.settings.get(SETTING_MIN_MEMBER_DELAY)}-{self.settings.get(SETTING_MAX_MEMBER_DELAY)}]s")
-        logger.info("تم تطبيق الإعدادات الجديدة على مكونات التطبيق.")
+        # logger.info(f"MonitoringThread settings applied from main app: Interval={self.settings.get(SETTING_MONITORING_INTERVAL)}min, MemberDelay=[{self.settings.get(SETTING_MIN_MEMBER_DELAY)}-{self.settings.get(SETTING_MAX_MEMBER_DELAY)}]s") # تعليق مخفف
+        # logger.info("تم تطبيق الإعدادات الجديدة على مكونات التطبيق.") # تعليق مخفف
 
     def _get_member_display_name_with_index(self, member, original_index):
         name_part = member.get_full_name_ar()
@@ -807,12 +859,12 @@ class AnemApp(QMainWindow):
                      display_message = f"{member_display_intro}: {message[:remaining_len]}..."
                 else: 
                      display_message = f"{member_display_intro}..."
-                logger.debug(f"Toast message (with member) truncated. Original: {message}")
+                # logger.debug(f"Toast message (with member) truncated. Original: {message}") # تعليق مخفف
             else:
                 display_message = full_message_with_member
         elif len(message) > max_toast_len:
             display_message = message[:max_toast_len] + "..."
-            logger.debug(f"Toast message (general) truncated. Original: {message}")
+            # logger.debug(f"Toast message (general) truncated. Original: {message}") # تعليق مخفف
 
         toast = ToastNotification(self)
         self.toast_notifications.append(toast)
@@ -828,7 +880,7 @@ class AnemApp(QMainWindow):
             with open(STYLESHEET_FILE, "r", encoding="utf-8") as f:
                 style = f.read()
                 self.setStyleSheet(style)
-                logger.info(f"تم تحميل ملف التنسيق بنجاح: {STYLESHEET_FILE}")
+                # logger.info(f"تم تحميل ملف التنسيق بنجاح: {STYLESHEET_FILE}") # تعليق مخفف
         except FileNotFoundError:
             logger.warning(f"ملف التنسيق {STYLESHEET_FILE} غير موجود. سيتم استخدام التنسيق الافتراضي.")
             self._show_toast(f"ملف التنسيق {STYLESHEET_FILE} غير موجود.", type="warning") 
@@ -839,10 +891,10 @@ class AnemApp(QMainWindow):
     def update_datetime(self):
         now = QDateTime.currentDateTime()
         arabic_locale = QLocale(QLocale.Arabic, QLocale.Algeria) 
-        self.datetime_label.setText(arabic_locale.toString(now, "dddd, dd MMMM yyyy - hh:mm:ss AP")) # تصحيح التنسيق
+        self.datetime_label.setText(arabic_locale.toString(now, "dddd, dd MMMM finalList - hh:mm:ss AP"))
     
     def toggle_column_visibility(self, checked):
-        logger.info(f"تبديل إظهار التفاصيل: {'إظهار' if checked else 'إخفاء'}")
+        # logger.info(f"تبديل إظهار التفاصيل: {'إظهار' if checked else 'إخفاء'}") # تعليق مخفف
         self.table.setColumnHidden(self.COL_NIN, not checked)
         self.table.setColumnHidden(self.COL_WASSIT, not checked)
         self.table.setColumnHidden(self.COL_CCP, not checked)
@@ -891,22 +943,22 @@ class AnemApp(QMainWindow):
             icon_item_in_table.setIcon(QIcon()) 
 
     def handle_member_processing_signal(self, original_member_index, is_processing_now):
-        logger.debug(f"HMP Signal RECEIVED: original_idx={original_member_index}, is_processing={is_processing_now}")
+        # logger.debug(f"HMP Signal RECEIVED: original_idx={original_member_index}, is_processing={is_processing_now}") # تعليق مخفف
         if not (0 <= original_member_index < len(self.members_list)):
             logger.warning(f"HMP Signal: فهرس العضو الأصلي غير صالح {original_member_index}")
             return
         
         member = self.members_list[original_member_index]
         member.is_processing = is_processing_now 
-        logger.debug(f"HMP Signal: Member {member.nin} is_processing set to {member.is_processing}")
+        # logger.debug(f"HMP Signal: Member {member.nin} is_processing set to {member.is_processing}") # تعليق مخفف
 
         row_in_table_to_update = -1
         current_list_displayed = self.filtered_members_list if self.is_filter_active else self.members_list
         try:
             row_in_table_to_update = current_list_displayed.index(member)
-            logger.debug(f"HMP Signal: Member {member.nin} found at row {row_in_table_to_update} in current_list_displayed.")
+            # logger.debug(f"HMP Signal: Member {member.nin} found at row {row_in_table_to_update} in current_list_displayed.") # تعليق مخفف
         except ValueError:
-            logger.debug(f"HMP Signal: العضو {member.nin} ليس في القائمة المعروضة حاليًا. لا يمكن تحديث الصف أو تحديد المؤشر.")
+            # logger.debug(f"HMP Signal: العضو {member.nin} ليس في القائمة المعروضة حاليًا. لا يمكن تحديث الصف أو تحديد المؤشر.") # تعليق مخفف
             return 
 
         if not (0 <= row_in_table_to_update < self.table.rowCount()):
@@ -915,35 +967,34 @@ class AnemApp(QMainWindow):
 
         member_display_name = self._get_member_display_name_with_index(member, original_member_index)
         if is_processing_now:
-            logger.debug(f"HMP Signal: Processing STARTED for member {member_display_name} at table row {row_in_table_to_update}")
+            # logger.debug(f"HMP Signal: Processing STARTED for member {member_display_name} at table row {row_in_table_to_update}") # تعليق مخفف
             self.active_spinner_row_in_view = row_in_table_to_update 
             self.spinner_char_idx = 0 
             
             self.table.selectRow(row_in_table_to_update)
-            logger.debug(f"HMP Signal: Row {row_in_table_to_update} selected for {member_display_name}")
+            # logger.debug(f"HMP Signal: Row {row_in_table_to_update} selected for {member_display_name}") # تعليق مخفف
             first_column_item = self.table.item(row_in_table_to_update, 0)
             if first_column_item:
                 self.table.scrollToItem(first_column_item, QAbstractItemView.EnsureVisible)
-                logger.debug(f"HMP Signal: Scrolled to row {row_in_table_to_update} for {member_display_name}")
-            else:
-                logger.warning(f"HMP Signal: No item at ({row_in_table_to_update}, 0) to scroll to for {member_display_name}.")
+                # logger.debug(f"HMP Signal: Scrolled to row {row_in_table_to_update} for {member_display_name}") # تعليق مخفف
+            # else: # logger.warning(f"HMP Signal: No item at ({row_in_table_to_update}, 0) to scroll to for {member_display_name}.") # تعليق مخفف
 
             icon_item = self.table.item(row_in_table_to_update, self.COL_ICON)
             if icon_item:
                 icon_item.setText(self.spinner_chars[self.spinner_char_idx])
                 icon_item.setIcon(QIcon()) 
-                logger.debug(f"HMP Signal: Initial spinner char set for row {row_in_table_to_update}")
+                # logger.debug(f"HMP Signal: Initial spinner char set for row {row_in_table_to_update}") # تعليق مخفف
 
             self.highlight_processing_row(row_in_table_to_update, force_processing_display=True)
             
             if not self.row_spinner_timer.isActive():
                 self.row_spinner_timer.start(self.row_spinner_timer_interval)
-                logger.debug(f"HMP Signal: Spinner timer started for row {row_in_table_to_update}")
+                # logger.debug(f"HMP Signal: Spinner timer started for row {row_in_table_to_update}") # تعليق مخفف
             
             self.update_status_bar_message(f"جاري معالجة العضو: {member_display_name}...", is_general_message=False)
 
         else: 
-            logger.debug(f"HMP Signal: Processing FINISHED for member {member_display_name} at table row {row_in_table_to_update}")
+            # logger.debug(f"HMP Signal: Processing FINISHED for member {member_display_name} at table row {row_in_table_to_update}") # تعليق مخفف
             is_still_pdf_downloading = self.active_download_all_pdfs_threads.get(original_member_index) and \
                                        self.active_download_all_pdfs_threads[original_member_index].isRunning()
             is_still_single_checking = self.single_check_thread and \
@@ -954,7 +1005,7 @@ class AnemApp(QMainWindow):
                 if self.active_spinner_row_in_view == row_in_table_to_update: 
                     self.row_spinner_timer.stop()
                     self.active_spinner_row_in_view = -1
-                    logger.debug(f"HMP Signal: Spinner timer stopped for row {row_in_table_to_update}")
+                    # logger.debug(f"HMP Signal: Spinner timer stopped for row {row_in_table_to_update}") # تعليق مخفف
                     icon_item = self.table.item(row_in_table_to_update, self.COL_ICON)
                     if icon_item: 
                         icon_item.setText("") 
@@ -963,14 +1014,14 @@ class AnemApp(QMainWindow):
 
 
     def highlight_processing_row(self, row_index_in_table, force_processing_display=None):
-        logger.debug(f"Highlight CALLED: row_in_table={row_index_in_table}, force_processing_display={force_processing_display}")
+        # logger.debug(f"Highlight CALLED: row_in_table={row_index_in_table}, force_processing_display={force_processing_display}") # تعليق مخفف
         if not (0 <= row_index_in_table < self.table.rowCount()):
-            logger.warning(f"Highlight: فهرس الصف {row_index_in_table} خارج الحدود.")
+            # logger.warning(f"Highlight: فهرس الصف {row_index_in_table} خارج الحدود.") # تعليق مخفف
             return
         
         current_list_displayed = self.filtered_members_list if self.is_filter_active else self.members_list
         if row_index_in_table >= len(current_list_displayed): 
-            logger.warning(f"Highlight: فهرس الصف {row_index_in_table} خارج حدود القائمة المعروضة (len={len(current_list_displayed)}).")
+            # logger.warning(f"Highlight: فهرس الصف {row_index_in_table} خارج حدود القائمة المعروضة (len={len(current_list_displayed)}).") # تعليق مخفف
             return
             
         member = current_list_displayed[row_index_in_table]
@@ -981,7 +1032,7 @@ class AnemApp(QMainWindow):
         if item_for_selection_check:
             is_row_selected_by_user_or_code = item_for_selection_check.isSelected()
 
-        logger.debug(f"Highlight: row={row_index_in_table}, member_nin={member.nin}, effective_is_processing={is_processing_flag}, is_row_selected={is_row_selected_by_user_or_code}")
+        # logger.debug(f"Highlight: row={row_index_in_table}, member_nin={member.nin}, effective_is_processing={is_processing_flag}, is_row_selected={is_row_selected_by_user_or_code}") # تعليق مخفف
 
         default_bg_color = self.table.palette().color(QPalette.Base) 
         alternate_bg_color = QColor(self.table.palette().color(QPalette.AlternateBase)) if self.table.alternatingRowColors() else default_bg_color
@@ -992,11 +1043,11 @@ class AnemApp(QMainWindow):
             item = self.table.item(row_index_in_table, col)
             if item:
                 if is_processing_flag:
-                    logger.debug(f"Highlight: Applying processing_bg_color to row {row_index_in_table}, col {col}")
+                    # logger.debug(f"Highlight: Applying processing_bg_color to row {row_index_in_table}, col {col}") # تعليق مخفف
                     item.setBackground(processing_bg_color)
                     item.setForeground(Qt.white) 
                 elif is_row_selected_by_user_or_code: 
-                    logger.debug(f"Highlight: Row {row_index_in_table}, col {col} is selected. Applying QSS selection color.")
+                    # logger.debug(f"Highlight: Row {row_index_in_table}, col {col} is selected. Applying QSS selection color.") # تعليق مخفف
                     if item.background() != selection_bg_color_from_qss:
                          item.setBackground(selection_bg_color_from_qss)
                     if item.foreground().color() != Qt.white: 
@@ -1088,7 +1139,7 @@ class AnemApp(QMainWindow):
             return
         
         member_display_name_edit_title = self._get_member_display_name_with_index(member_to_edit, original_member_index)
-        logger.info(f"فتح نافذة تعديل للعضو: {member_display_name_edit_title}")
+        # logger.info(f"فتح نافذة تعديل للعضو: {member_display_name_edit_title}") # تعليق مخفف
         dialog = EditMemberDialog(member_to_edit, self) 
         if dialog.exec_() == EditMemberDialog.Accepted:
             new_data = dialog.get_data()
@@ -1115,7 +1166,7 @@ class AnemApp(QMainWindow):
                         logger.warning(f"فشل تعديل العضو {member_display_name_edit_title} بسبب تكرار مع {conflicting_member_display}")
                         return
                 
-            logger.info(f"حفظ التعديلات للعضو: {member_display_name_edit_title} -> NIN={new_data['nin']}, Phone: {new_data['phone_number']}")
+            # logger.info(f"حفظ التعديلات للعضو: {member_display_name_edit_title} -> NIN={new_data['nin']}, Phone: {new_data['phone_number']}") # تعليق مخفف
             member_to_edit.nin = new_data["nin"]
             member_to_edit.wassit_no = new_data["wassit_no"]
             member_to_edit.ccp = new_data["ccp"]
@@ -1288,7 +1339,7 @@ class AnemApp(QMainWindow):
             original_member_index = self.members_list.index(member)
             self.update_member_gui_in_table(original_member_index, member.status, member.last_activity_detail, get_icon_name_for_status(member.status))
         except ValueError:
-            logger.error(f"خطأ: العضو {member.nin} غير موجود في القائمة الرئيسية عند تحديث الصف.")
+            # logger.error(f"خطأ: العضو {member.nin} غير موجود في القائمة الرئيسية عند تحديث الصف.") # تعليق مخفف
             status_item = self.table.item(row_in_table, self.COL_STATUS)
             if status_item: status_item.setText(member.status)
             icon_item = self.table.item(row_in_table, self.COL_ICON)
@@ -1299,7 +1350,7 @@ class AnemApp(QMainWindow):
         
     def update_member_gui_in_table(self, original_member_index, status_text, detail_text, icon_name_str):
         if not (0 <= original_member_index < len(self.members_list)):
-            logger.warning(f"update_member_gui_in_table: فهرس أصلي غير صالح {original_member_index}")
+            # logger.warning(f"update_member_gui_in_table: فهرس أصلي غير صالح {original_member_index}") # تعليق مخفف
             return
         
         member = self.members_list[original_member_index]
@@ -1309,11 +1360,11 @@ class AnemApp(QMainWindow):
         try:
             row_in_table_to_update = current_list_displayed.index(member)
         except ValueError:
-            logger.debug(f"العضو {self._get_member_display_name_with_index(member, original_member_index)} ليس في القائمة المعروضة حاليًا، لا يتم تحديث واجهة المستخدم للجدول مباشرة.")
+            # logger.debug(f"العضو {self._get_member_display_name_with_index(member, original_member_index)} ليس في القائمة المعروضة حاليًا، لا يتم تحديث واجهة المستخدم للجدول مباشرة.") # تعليق مخفف
             return
 
         if not (0 <= row_in_table_to_update < self.table.rowCount()):
-             logger.warning(f"update_member_gui_in_table: فهرس الجدول المحسوب غير صالح {row_in_table_to_update}")
+             # logger.warning(f"update_member_gui_in_table: فهرس الجدول المحسوب غير صالح {row_in_table_to_update}") # تعليق مخفف
              return
 
         self.table.item(row_in_table_to_update, self.COL_FULL_NAME_AR).setText(member.get_full_name_ar())
@@ -1383,7 +1434,7 @@ class AnemApp(QMainWindow):
             member.nom_ar = nom_ar
             member.prenom_ar = prenom_ar
             member_display_name = self._get_member_display_name_with_index(member, original_member_index)
-            logger.info(f"تحديث اسم ولقب العضو (عربي) {member_display_name}")
+            # logger.info(f"تحديث اسم ولقب العضو (عربي) {member_display_name}") # تعليق مخفف
             
             row_in_table_to_update = -1
             current_list_displayed = self.filtered_members_list if self.is_filter_active else self.members_list
@@ -1396,7 +1447,7 @@ class AnemApp(QMainWindow):
                     if not self.suppress_initial_messages:
                         self._show_toast(f"تم تحديث اسم العضو.", type="info", member_obj=member, original_idx_if_member=original_member_index)
             except ValueError:
-                logger.debug(f"العضو {member_display_name} ليس في القائمة المعروضة حاليًا، لا يتم تحديث الاسم في الجدول مباشرة.")
+                pass # logger.debug(f"العضو {member_display_name} ليس في القائمة المعروضة حاليًا، لا يتم تحديث الاسم في الجدول مباشرة.") # تعليق مخفف
 
             self.save_members_data() 
 
@@ -1406,7 +1457,7 @@ class AnemApp(QMainWindow):
             member_display = self._get_member_display_name_with_index(member_obj, original_idx_if_member)
             final_message = f"{member_display}: {message}"
         
-        logger.info(f"رسالة شريط الحالة: {final_message}")
+        # logger.info(f"رسالة شريط الحالة: {final_message}") # تعليق مخفف
         
         if hasattr(self, 'status_bar_label'):
             self.status_bar_label.setText(final_message)
@@ -1448,7 +1499,7 @@ class AnemApp(QMainWindow):
             self.update_status_bar_message(f"بدأت المراقبة (الدورة كل {monitoring_interval_minutes} دقيقة)...", is_general_message=False) 
             self._show_toast(f"بدأت المراقبة (الدورة كل {monitoring_interval_minutes} دقيقة).", type="info")
         else:
-            logger.info("المراقبة جارية بالفعل.")
+            # logger.info("المراقبة جارية بالفعل.") # تعليق مخفف
             self._show_toast("المراقبة جارية بالفعل.", type="info") 
             self.update_status_bar_message("المراقبة جارية بالفعل.", is_general_message=True)
 
@@ -1469,9 +1520,8 @@ class AnemApp(QMainWindow):
                                 member.is_processing = False 
                                 self.update_member_gui_in_table(original_member_index, member.status, member.last_activity_detail, get_icon_name_for_status(member.status))
                         except ValueError:
-                             logger.warning(f"StopMonitoring: لم يتم العثور على العضو في active_spinner_row_in_view ({self.active_spinner_row_in_view}) في القائمة الرئيسية.")
-                    else:
-                        logger.warning(f"StopMonitoring: active_spinner_row_in_view ({self.active_spinner_row_in_view}) خارج حدود current_list_displayed.")
+                             pass # logger.warning(f"StopMonitoring: لم يتم العثور على العضو في active_spinner_row_in_view ({self.active_spinner_row_in_view}) في القائمة الرئيسية.") # تعليق مخفف
+                    # else: # logger.warning(f"StopMonitoring: active_spinner_row_in_view ({self.active_spinner_row_in_view}) خارج حدود current_list_displayed.") # تعليق مخفف
                 self.active_spinner_row_in_view = -1
 
             self.start_button.setEnabled(True)
@@ -1486,7 +1536,7 @@ class AnemApp(QMainWindow):
                     self.members_list[i].is_processing = False
                     self.update_member_gui_in_table(i, self.members_list[i].status, self.members_list[i].last_activity_detail, get_icon_name_for_status(self.members_list[i].status))
         else:
-            logger.info("المراقبة ليست جارية.")
+            # logger.info("المراقبة ليست جارية.") # تعليق مخفف
             self._show_toast("المراقبة ليست جارية حاليًا.", type="info") 
             self.update_status_bar_message("المراقبة ليست جارية.", is_general_message=True)
 
@@ -1535,7 +1585,7 @@ class AnemApp(QMainWindow):
                 data_to_save.append(member_dict)
             with open(DATA_FILE, 'w', encoding='utf-8') as f:
                 json.dump(data_to_save, f, ensure_ascii=False, indent=4)
-            logger.debug(f"تم حفظ بيانات الأعضاء في {DATA_FILE}") 
+            # logger.debug(f"تم حفظ بيانات الأعضاء في {DATA_FILE}") # تعليق مخفف
         except Exception as e:
             logger.exception(f"خطأ عند حفظ البيانات: {e}")
             self.update_status_bar_message(f"خطأ عند حفظ البيانات: {e}", is_general_message=True)
@@ -1553,7 +1603,7 @@ class AnemApp(QMainWindow):
         self.save_members_data() 
         self.save_app_settings() 
         
-        logger.info("انتظار إنهاء خيوط الجلب الأولي...")
+        # logger.info("انتظار إنهاء خيوط الجلب الأولي...") # تعليق مخفف
         for thread in self.initial_fetch_threads:
             if thread.isRunning():
                 thread.quit() 
@@ -1561,14 +1611,14 @@ class AnemApp(QMainWindow):
                     logger.warning(f"الخيط {thread} لم ينتهِ في الوقت المناسب عند الإغلاق.")
         
         if self.single_check_thread and self.single_check_thread.isRunning():
-            logger.info("إيقاف خيط الفحص الفردي قبل الإغلاق...")
+            # logger.info("إيقاف خيط الفحص الفردي قبل الإغلاق...") # تعليق مخفف
             self.single_check_thread.quit() 
             if not self.single_check_thread.wait(1000): 
                  logger.warning("خيط الفحص الفردي لم ينته في الوقت المناسب.")
         
         active_pdf_dl_threads_copy = list(self.active_download_all_pdfs_threads.values())
         if active_pdf_dl_threads_copy:
-            logger.info(f"إيقاف {len(active_pdf_dl_threads_copy)} خيوط تحميل PDF نشطة...")
+            # logger.info(f"إيقاف {len(active_pdf_dl_threads_copy)} خيوط تحميل PDF نشطة...") # تعليق مخفف
             for pdf_thread in active_pdf_dl_threads_copy:
                 if pdf_thread.isRunning():
                     pdf_thread.stop() 
@@ -1577,26 +1627,24 @@ class AnemApp(QMainWindow):
             self.active_download_all_pdfs_threads.clear()
 
 
-        if hasattr(self, 'datetime_timer') and self.datetime_timer.isActive(): self.datetime_timer.stop() # التحقق قبل الإيقاف
-        if hasattr(self, 'row_spinner_timer') and self.row_spinner_timer.isActive(): self.row_spinner_timer.stop()  # التحقق قبل الإيقاف
+        if hasattr(self, 'datetime_timer') and self.datetime_timer.isActive(): self.datetime_timer.stop()
+        if hasattr(self, 'row_spinner_timer') and self.row_spinner_timer.isActive(): self.row_spinner_timer.stop()
         logger.info("تم إغلاق التطبيق.")
         super().closeEvent(event)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     main_window = AnemApp()
+    
     if not hasattr(main_window, '_should_initialize_ui') or not main_window._should_initialize_ui:
-        logger.critical("__main__: لم يتم تحديد _should_initialize_ui أو قيمته False. الخروج من التطبيق.")
+        logger.critical("__main__: لم يتم تحديد _should_initialize_ui أو قيمته False بعد _initialize_and_check_activation. الخروج من التطبيق.")
         if hasattr(main_window, 'activation_successful') and not main_window.activation_successful:
              if hasattr(main_window, 'firebase_service') and not main_window.firebase_service.is_initialized():
                  QMessageBox.critical(None, "خطأ فادح في Firebase",
                                      f"لا يمكن تهيئة خدمة Firebase. الرجاء التأكد من وجود ملف '{FIREBASE_SERVICE_ACCOUNT_KEY_FILE}' وأنه صالح.\nسيتم إغلاق البرنامج.",
                                      QMessageBox.Ok)
-             elif not (hasattr(main_window, 'firebase_service') and main_window.firebase_service.is_initialized()):
-                 QMessageBox.critical(None, "خطأ فادح", "حدث خطأ غير متوقع أثناء تهيئة خدمات البرنامج.\nسيتم إغلاق البرنامج.", QMessageBox.Ok)
         sys.exit(1) 
     
-    logger.info("__main__: نجح التفعيل. جاري إظهار النافذة الرئيسية.")
+    # logger.info("__main__: نجح التفعيل. جاري إظهار النافذة الرئيسية.") # تعليق مخفف
     main_window.show()
     sys.exit(app.exec_())
-

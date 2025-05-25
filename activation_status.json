@@ -1,0 +1,16 @@
+{
+    "is_activated": true,
+    "activation_code": "12345V9KF3S84U40E",
+    "activated_at": "2025-05-25T01:45:53.732420",
+    "device_info": {
+        "generated_device_id": "957330f0-a672-46c0-b9fd-c4ac18a5c88a",
+        "system_username": "MX8",
+        "hostname": "DESKTOP-78PBJTO",
+        "local_ip": "192.168.1.8",
+        "os_platform": "Windows",
+        "os_version": "10.0.19042",
+        "os_release": "10",
+        "architecture": "AMD64",
+        "public_ip": "105.97.139.117"
+    }
+}

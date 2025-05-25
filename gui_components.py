@@ -3,10 +3,10 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QDialog, QFormLayout, QDialogButtonBox,
     QSpinBox, QStyle, QApplication, QDesktopWidget, QTextEdit,
-    QScrollArea 
+    QScrollArea, QFrame,QSizePolicy # تمت إضافة QFrame و QSizePolicy
 )
 from PyQt5.QtCore import Qt, QTimer, QPoint, QEasingCurve, QPropertyAnimation, QRegularExpression
-from PyQt5.QtGui import QIcon, QRegularExpressionValidator, QColor
+from PyQt5.QtGui import QIcon, QRegularExpressionValidator, QColor, QPixmap, QFont # تمت إضافة QPixmap و QFont
 
 from utils import QColorConstants
 
@@ -413,45 +413,148 @@ class ActivationDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("تفعيل البرنامج")
-        self.setModal(True) 
+        self.setModal(True)
         self.setLayoutDirection(Qt.RightToLeft)
-        self.setMinimumWidth(350)
+        self.setMinimumWidth(400) # زيادة العرض قليلًا
+        self.setObjectName("ActivationDialog") # لتمكين التنسيق الخاص
 
-        layout = QVBoxLayout(self)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(20, 20, 20, 20) # إضافة هوامش
+        main_layout.setSpacing(15) # زيادة التباعد
 
+        # --- إطار علوي للشعار والعنوان ---
+        header_frame = QFrame(self)
+        header_frame.setObjectName("ActivationHeaderFrame")
+        header_layout = QHBoxLayout(header_frame)
+        header_layout.setContentsMargins(0,0,0,0)
+
+        # شعار (أيقونة مفتاح أو قفل)
+        self.icon_label = QLabel(self)
+        # يمكنك استخدام أيقونة من QStyle أو تحميل صورة
+        key_icon = self.style().standardIcon(QStyle.SP_ComputerIcon) #  SP_DriveHDICon أو SP_ComputerIcon كأمثلة
+        if not key_icon.isNull():
+             self.icon_label.setPixmap(key_icon.pixmap(48, 48)) # حجم مناسب
+        self.icon_label.setAlignment(Qt.AlignCenter)
+        header_layout.addWidget(self.icon_label)
+
+        title_font = QFont("Tajawal Medium", 16) # استخدام خط Tajawal Medium
+        title_font.setBold(True)
+        self.title_label = QLabel("تفعيل البرنامج", self)
+        self.title_label.setFont(title_font)
+        self.title_label.setAlignment(Qt.AlignCenter)
+        self.title_label.setObjectName("ActivationTitleLabel")
+        header_layout.addWidget(self.title_label)
+        
+        header_layout.setStretch(1,1) # لجعل العنوان يتمدد
+        main_layout.addWidget(header_frame)
+        
+        # --- رسالة التعليمات ---
         self.instruction_label = QLabel("الرجاء إدخال كود التفعيل الخاص بك للمتابعة:", self)
         self.instruction_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.instruction_label)
+        self.instruction_label.setWordWrap(True)
+        self.instruction_label.setObjectName("ActivationInstructionLabel")
+        main_layout.addWidget(self.instruction_label)
 
+        # --- حقل إدخال الكود ---
         self.activation_code_input = QLineEdit(self)
         self.activation_code_input.setPlaceholderText("أدخل كود التفعيل هنا")
-        self.activation_code_input.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.activation_code_input)
+        self.activation_code_input.setAlignment(Qt.AlignCenter) # محاذاة النص في الوسط
+        self.activation_code_input.setMinimumHeight(35) # زيادة ارتفاع الحقل
+        self.activation_code_input.setObjectName("ActivationCodeInput")
+        # يمكنك إضافة QValidator هنا إذا كان للكود تنسيق معين
+        main_layout.addWidget(self.activation_code_input)
 
+        # --- رسالة الحالة ---
         self.status_label = QLabel("", self) 
         self.status_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.status_label)
-
-        self.buttons = QDialogButtonBox(Qt.Horizontal, self)
-        self.activate_button = self.buttons.addButton("تفعيل", QDialogButtonBox.AcceptRole)
-        self.cancel_button = self.buttons.addButton("إلغاء", QDialogButtonBox.RejectRole)
+        self.status_label.setWordWrap(True)
+        self.status_label.setMinimumHeight(30) # حجز مساحة لرسالة الحالة
+        self.status_label.setObjectName("ActivationStatusLabel")
+        main_layout.addWidget(self.status_label)
         
-        layout.addWidget(self.buttons)
+        # --- فاصل ---
+        line = QFrame(self)
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        main_layout.addWidget(line)
 
+        # --- الأزرار ---
+        self.buttons_layout = QHBoxLayout() # تخطيط أفقي للأزرار
+        self.buttons_layout.setSpacing(10)
+
+        self.activate_button = QPushButton("تفعيل", self)
+        self.activate_button.setIcon(self.style().standardIcon(QStyle.SP_DialogApplyButton))
+        self.activate_button.setObjectName("ActivationActivateButton")
+        self.buttons_layout.addWidget(self.activate_button)
+
+        self.cancel_button = QPushButton("إلغاء", self)
+        self.cancel_button.setIcon(self.style().standardIcon(QStyle.SP_DialogCancelButton))
+        self.cancel_button.setObjectName("ActivationCancelButton")
+        self.buttons_layout.addWidget(self.cancel_button)
+        
+        main_layout.addLayout(self.buttons_layout)
+
+        # ربط الإشارات
         self.activate_button.clicked.connect(self._handle_activate_clicked)
-        self.cancel_button.clicked.connect(self._handle_cancel_clicked)
+        self.cancel_button.clicked.connect(self.reject) # QDialog.reject() سيغلق النافذة
+
+        # تطبيق بعض التنسيقات الأولية
+        self.setStyleSheet("""
+            QDialog#ActivationDialog {
+                background-color: #2E2E2E; /* لون خلفية أغمق قليلاً */
+            }
+            QFrame#ActivationHeaderFrame {
+                border-bottom: 1px solid #4A4A4A;
+                padding-bottom: 10px;
+                margin-bottom: 5px;
+            }
+            QLabel#ActivationTitleLabel {
+                color: #00A2E8; /* لون أزرق مميز للعنوان */
+                font-family: "Tajawal Bold"; /* تأكيد استخدام الخط العريض */
+            }
+            QLabel#ActivationInstructionLabel {
+                color: #D0D0D0; /* لون أفتح قليلاً للتعليمات */
+                font-size: 10pt;
+                font-family: "Tajawal Regular";
+            }
+            QLineEdit#ActivationCodeInput {
+                font-size: 12pt; /* خط أكبر لحقل الإدخال */
+                font-family: "Tajawal Medium";
+                border: 1px solid #555555;
+                border-radius: 4px;
+                padding: 8px;
+            }
+            QLineEdit#ActivationCodeInput:focus {
+                border: 1px solid #00A2E8;
+            }
+            QLabel#ActivationStatusLabel {
+                font-size: 9pt;
+                font-family: "Tajawal Regular";
+                font-weight: bold;
+            }
+            QPushButton#ActivationActivateButton {
+                background-color: #27AE60; /* أخضر للتفعيل */
+                font-family: "Tajawal Bold";
+                padding: 10px 20px;
+            }
+            QPushButton#ActivationActivateButton:hover {
+                background-color: #2ECC71;
+            }
+            QPushButton#ActivationCancelButton {
+                background-color: #7F8C8D; /* رمادي للإلغاء */
+                font-family: "Tajawal Bold";
+                padding: 10px 20px;
+            }
+            QPushButton#ActivationCancelButton:hover {
+                background-color: #95A5A6;
+            }
+        """)
 
     def _handle_activate_clicked(self):
         """معالجة الضغط على زر التفعيل."""
-        print("ActivationDialog: تم الضغط على زر 'تفعيل'") 
-        # logger.debug("ActivationDialog: تم الضغط على زر 'تفعيل'") # إذا كان لديك logger متاح هنا
+        # سيتم استدعاء self.accept() من main_app.py بعد التحقق الناجح
+        # هنا فقط نقوم بإعلام main_app.py بأن المستخدم ضغط "تفعيل"
         self.accept() 
-
-    def _handle_cancel_clicked(self):
-        """معالجة الضغط على زر الإلغاء."""
-        print("ActivationDialog: تم الضغط على زر 'إلغاء'") 
-        # logger.debug("ActivationDialog: تم الضغط على زر 'إلغاء'")
-        self.reject() 
 
     def get_activation_code(self):
         return self.activation_code_input.text().strip()
@@ -459,6 +562,10 @@ class ActivationDialog(QDialog):
     def show_status_message(self, message, is_error=False):
         self.status_label.setText(message)
         if is_error:
-            self.status_label.setStyleSheet("color: #E74C3C; font-weight: bold;")
+            self.status_label.setStyleSheet("color: #E74C3C; font-weight: bold; font-family: 'Tajawal Regular';")
         else:
-            self.status_label.setStyleSheet("color: #2ECC71; font-weight: bold;")
+            self.status_label.setStyleSheet("color: #2ECC71; font-weight: bold; font-family: 'Tajawal Regular';")
+        
+        if "جاري التحقق" in message:
+             self.status_label.setStyleSheet("color: #E0E0E0; font-family: 'Tajawal Regular';") # لون محايد للتحميل
+
